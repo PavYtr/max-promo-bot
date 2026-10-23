@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: festival
+      POSTGRES_PASSWORD: festival
+      POSTGRES_DB: festival
+    ports: ["127.0.0.1:15432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U festival -d festival"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["127.0.0.1:16379:6379"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  migrate:
+    build: .
+    command: ["migrate", "up"]
+    environment:
+      BOT_MODE: webhook
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-local-development-secret}
+      DATABASE_URL: postgres://festival:festival@postgres:5432/festival?sslmode=disable
+    depends_on:
+      postgres: {condition: service_healthy}
+  app:
+    build: .
+    ports: ["127.0.0.1:8080:8080"]
+    healthcheck:
+      test: ["CMD", "/app/bot", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    environment:
+      DATABASE_URL: postgres://festival:festival@postgres:5432/festival?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      MAX_TOKEN: ${MAX_TOKEN:-}
+      BOT_MODE: ${BOT_MODE:-webhook}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-local-development-secret}
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+      MAX_API_URL: ${MAX_API_URL:-https://platform-api2.max.ru}
+      MAX_CA_FILE: certs/russian_trusted_root_ca.crt
+      FESTIVAL_TIMEZONE: ${FESTIVAL_TIMEZONE:-Europe/Moscow}
+      ADMIN_IDS: ${ADMIN_IDS:-}
+      ADMIN_CHAT_ID: ${ADMIN_CHAT_ID:-}
+      BANNER_URL: ${BANNER_URL:-}
+      BANNER_TOKEN: ${BANNER_TOKEN:-}
+      HOW_TO_TEXT: ${HOW_TO_TEXT:-}
+      RULES_TEXT: ${RULES_TEXT:-}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+volumes:
+  postgres-data:
+  redis-data:
