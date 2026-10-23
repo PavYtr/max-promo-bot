@@ -114,8 +114,8 @@ type Winner struct {
 	UserID        int64
 	Role          string
 	ReserveOrder  pgtype.Int4
-	Prize         string
-	PrizeQuantity int32
+	Prize         pgtype.Text
+	PrizeQuantity pgtype.Int4
 	State         string
 	NotifiedAt    pgtype.Timestamptz
 	Deadline      pgtype.Timestamptz
