@@ -89,7 +89,8 @@ type Body struct {
 type Button struct {
 	Type    string `json:"type"`
 	Text    string `json:"text"`
-	Payload string `json:"payload"`
+	Payload string `json:"payload,omitempty"`
+	URL     string `json:"url,omitempty"`
 }
 
 func Keyboard(buttons ...Button) Attachment {

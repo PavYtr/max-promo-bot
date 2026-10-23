@@ -172,13 +172,16 @@ func (c *Client) Subscribe(ctx context.Context, endpoint, secret string) error {
 }
 func (c *Client) CheckMembership(ctx context.Context, chat, user int64) (bool, error) {
 	var result struct {
-		Members []User `json:"members"`
+		Members *[]User `json:"members"`
 	}
 	err := c.Call(ctx, "GET", fmt.Sprintf("/chats/%d/members", chat), url.Values{"user_ids": {strconv.FormatInt(user, 10)}}, nil, 0, &result)
 	if err != nil {
 		return false, err
 	}
-	for _, m := range result.Members {
+	if result.Members == nil {
+		return false, errors.New("invalid MAX membership response")
+	}
+	for _, m := range *result.Members {
 		if m.ID == user {
 			return true, nil
 		}

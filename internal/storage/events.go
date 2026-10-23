@@ -141,5 +141,12 @@ func (s Store) DeliverOne(ctx context.Context, sender Sender) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// A registration confirmation and its delivery state commit together.
+	if _, err = tx.Exec(ctx, `UPDATE daily_entries SET
+	 confirmation_status=outgoing.status, confirmed_at=outgoing.sent_at
+	 FROM outgoing WHERE outgoing.id=$1 AND daily_entries.id=outgoing.daily_entry_id
+	 AND outgoing.status IN ('sent','failed') AND daily_entries.confirmation_status<>'sent'`, id); err != nil {
+		return false, err
+	}
 	return true, tx.Commit(ctx)
 }

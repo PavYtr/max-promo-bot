@@ -132,6 +132,41 @@ func TestCancellationTLSAndRetryAfter(t *testing.T) {
 		t.Fatal("Retry-After parsing")
 	}
 }
+
+func TestMembershipAbsenceAndErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		body    string
+		wantErr bool
+	}{
+		{"absent", 200, `{"members":[]}`, false},
+		{"different user", 200, `{"members":[{"user_id":8}]}`, false},
+		{"no permissions", 403, `{"code":"access.denied"}`, true},
+		{"invalid response", 200, `not json`, true},
+		{"missing members", 200, `{}`, true},
+		{"null members", 200, `{"members":null}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "GET" || r.URL.Path != "/chats/-3/members" || r.URL.Query().Get("user_ids") != "7" {
+					t.Error("wrong subscription request")
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer s.Close()
+			client, err := New(s.URL, "token", "", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			member, err := client.CheckMembership(context.Background(), -3, 7)
+			if member || (err != nil) != tc.wantErr {
+				t.Fatalf("member=%v error=%v", member, err)
+			}
+		})
+	}
+}
 func TestDecodeIdentity(t *testing.T) {
 	a := []byte(`{"update_type":"message_created","timestamp":1,"message":{"sender":{"user_id":7},"recipient":{"chat_id":9},"body":{"mid":"m1","text":"/start"}}}`)
 	b := []byte(`{"timestamp":2,"message":{"sender":{"user_id":7},"recipient":{"chat_id":9},"body":{"mid":"m1","text":"/start"}},"update_type":"message_created"}`)

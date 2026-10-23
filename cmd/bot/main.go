@@ -145,7 +145,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return nil
 	}
 	store := storage.Store{Pool: pool}
-	handler := bot.Handler{Config: c}
+	handler := bot.Handler{Config: c, Membership: api}
 	appCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	var wg sync.WaitGroup

@@ -4,6 +4,7 @@ package maxapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/redis/go-redis/v9"
 	"net/http"
@@ -11,9 +12,68 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestMembershipRetriesWithRedisLimiter(t *testing.T) {
+	opts, err := redis.ParseURL(os.Getenv("TEST_REDIS_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rdb := redis.NewClient(opts)
+	defer rdb.Close()
+	token := fmt.Sprintf("membership-%d", time.Now().UnixNano())
+	limiter := NewLimiter(rdb, token)
+	var hits atomic.Int64
+	var status atomic.Int64
+	status.Store(http.StatusOK)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := hits.Add(1)
+		if r.Method != http.MethodGet || r.URL.Path != "/chats/-3/members" || r.URL.Query().Get("user_ids") != "7" {
+			t.Error("wrong membership request")
+		}
+		w.WriteHeader(int(status.Load()))
+		if n > 13 {
+			_, _ = w.Write([]byte(`{"members":[{"user_id":7}]}`))
+		} else {
+			_, _ = w.Write([]byte(`{"members":[]}`))
+		}
+	}))
+	defer srv.Close()
+	client, err := New(srv.URL, token, "", limiter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for range 12 {
+		if member, err := client.CheckMembership(ctx, -3, 7); member || err != nil {
+			t.Fatalf("absence: member=%v error=%v", member, err)
+		}
+	}
+	status.Store(http.StatusForbidden)
+	if member, err := client.CheckMembership(ctx, -3, 7); member || err == nil {
+		t.Fatalf("API error treated as absence: member=%v error=%v", member, err)
+	}
+	// Another process can impose a cooldown; it must not consume a check attempt.
+	if err := NewLimiter(rdb, token).Cooldown(ctx, 150*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	short, cancelShort := context.WithTimeout(ctx, 30*time.Millisecond)
+	defer cancelShort()
+	if _, err := client.CheckMembership(short, -3, 7); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("limiter must wait: %v", err)
+	}
+	if hits.Load() != 13 {
+		t.Fatal("request reached API during cooldown")
+	}
+	status.Store(http.StatusOK)
+	if member, err := client.CheckMembership(ctx, -3, 7); !member || err != nil {
+		t.Fatalf("check after waiting: member=%v error=%v", member, err)
+	}
+}
 
 func TestSharedLimitsOnSimulator(t *testing.T) {
 	dsn := os.Getenv("TEST_REDIS_URL")

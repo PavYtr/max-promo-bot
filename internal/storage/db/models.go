@@ -43,15 +43,16 @@ type Inbox struct {
 }
 
 type Outgoing struct {
-	ID          int64
-	EventKey    string
-	ChatID      int64
-	CallbackID  pgtype.Text
-	Body        []byte
-	Status      string
-	Attempts    int32
-	AvailableAt pgtype.Timestamptz
-	SentAt      pgtype.Timestamptz
+	ID           int64
+	EventKey     string
+	ChatID       int64
+	CallbackID   pgtype.Text
+	Body         []byte
+	Status       string
+	Attempts     int32
+	AvailableAt  pgtype.Timestamptz
+	SentAt       pgtype.Timestamptz
+	DailyEntryID pgtype.Int8
 }
 
 type Partner struct {
@@ -74,6 +75,13 @@ type Partner struct {
 type PollCursor struct {
 	Singleton bool
 	Marker    pgtype.Int8
+}
+
+type PromoRequest struct {
+	EventKey    string
+	UserID      int64
+	PartnerID   pgtype.Int8
+	RequestedAt pgtype.Timestamptz
 }
 
 type Promocode struct {
