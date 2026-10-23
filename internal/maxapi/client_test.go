@@ -144,6 +144,8 @@ func TestMembershipAbsenceAndErrors(t *testing.T) {
 		{"different user", 200, `{"members":[{"user_id":8}]}`, false},
 		{"no permissions", 403, `{"code":"access.denied"}`, true},
 		{"invalid response", 200, `not json`, true},
+		{"missing members", 200, `{}`, true},
+		{"null members", 200, `{"members":null}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

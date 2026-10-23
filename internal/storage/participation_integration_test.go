@@ -168,6 +168,148 @@ func TestConcurrentPromoAllocation(t *testing.T) {
 	}
 }
 
+func TestPromoRequestHistory(t *testing.T) {
+	s := testStore(t)
+	h, partners := seedParticipation(t, s, 1, 1)
+	ctx := context.Background()
+	active := h.Now()
+	for i, step := range []struct {
+		id      string
+		user    int64
+		days    int
+		partner bool
+	}{
+		{"first", 7, 0, true},
+		{"repeat", 7, 0, true},
+		{"empty", 8, 0, true},
+		{"before", 7, -1, false},
+		{"after", 7, 1, false},
+	} {
+		h.Now = func() time.Time { return active.AddDate(0, 0, step.days) }
+		raw := participantCallback(step.id, "promo:get", step.user)
+		if err := s.Save(ctx, raw); err != nil {
+			t.Fatal(err)
+		}
+		process(t, s, h)
+		var user int64
+		var partner *int64
+		var requested time.Time
+		if err := s.Pool.QueryRow(ctx, `SELECT user_id,partner_id,requested_at FROM promo_requests WHERE event_key=$1`, "message_callback:"+step.id).Scan(&user, &partner, &requested); err != nil {
+			t.Fatal(err)
+		}
+		if user != step.user || requested.IsZero() || (partner != nil) != step.partner || (partner != nil && *partner != partners[0].ID) {
+			t.Fatalf("incorrect request history: user=%d partner=%v requested=%v", user, partner, requested)
+		}
+		// Recreate the store to verify persisted deduplication after a restart.
+		restarted := storage.Store{Pool: s.Pool}
+		if err := restarted.Save(ctx, raw); err != nil {
+			t.Fatal(err)
+		}
+		process(t, restarted, h)
+		if count(t, s, "promo_requests") != i+1 || count(t, s, "outgoing") != i+1 {
+			t.Fatal("redelivery created a request or response")
+		}
+	}
+	var issued int
+	var recipient int64
+	var issuedAt time.Time
+	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM promocodes WHERE user_id IS NOT NULL`).Scan(&issued); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Pool.QueryRow(ctx, `SELECT user_id,issued_at FROM promocodes WHERE user_id IS NOT NULL`).Scan(&recipient, &issuedAt); err != nil {
+		t.Fatal(err)
+	}
+	if issued != 1 || recipient != 7 || !issuedAt.Equal(active) || count(t, s, "user_chances") != 1 {
+		t.Fatal("requests changed the actual issuance history")
+	}
+	// Navigation and subscription checks are not promo requests.
+	actionReply(t, s, h, "menu-history", "menu")
+	actionReply(t, s, h, "verify-history", "draw:verify")
+	if count(t, s, "promo_requests") != 5 {
+		t.Fatal("unrelated action counted as a promo request")
+	}
+}
+
+func TestIssuePromoConcurrentCalls(t *testing.T) {
+	s := testStore(t)
+	h, partners := seedParticipation(t, s, 1, 10)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	const calls = 10
+	codes := make(chan string, calls)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range calls {
+		wg.Go(func() {
+			<-start
+			tx, err := s.Pool.Begin(ctx)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer tx.Rollback(ctx)
+			// Call the storage function without the handler's participant lock.
+			code, err := storage.IssuePromo(ctx, tx, 7, partners[0], h.Now(), h.Config.Location)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if err = tx.Commit(ctx); err != nil {
+				t.Error(err)
+				return
+			}
+			codes <- code
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(codes)
+	if len(codes) != calls {
+		t.Fatalf("successful calls: %d, want %d", len(codes), calls)
+	}
+	for code := range codes {
+		if code != "CODE-0-0" {
+			t.Fatalf("concurrent call returned %q, want the same assigned code", code)
+		}
+	}
+	var issued, available int
+	var issuedAt, grantedAt time.Time
+	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE user_id IS NOT NULL),
+	 count(*) FILTER (WHERE user_id IS NULL) FROM promocodes`).Scan(&issued, &available); err != nil {
+		t.Fatal(err)
+	}
+	if issued != 1 || available != 9 || count(t, s, "user_chances") != 1 {
+		t.Fatalf("issued=%d available=%d chances=%d", issued, available, count(t, s, "user_chances"))
+	}
+	if err := s.Pool.QueryRow(ctx, `SELECT p.issued_at,c.granted_at FROM promocodes p
+	 JOIN user_chances c ON c.user_id=p.user_id AND c.partner_id=p.partner_id
+	 WHERE p.user_id=7`).Scan(&issuedAt, &grantedAt); err != nil {
+		t.Fatal(err)
+	}
+	// A later repeat must preserve both the assigned code and original timestamps.
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	code, err := storage.IssuePromo(ctx, tx, 7, partners[0], h.Now().Add(time.Hour), h.Config.Location)
+	if err != nil || code != "CODE-0-0" {
+		t.Fatalf("repeat: code=%q err=%v", code, err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var repeatedIssuedAt, repeatedGrantedAt time.Time
+	if err = s.Pool.QueryRow(ctx, `SELECT p.issued_at,c.granted_at FROM promocodes p
+	 JOIN user_chances c ON c.user_id=p.user_id AND c.partner_id=p.partner_id
+	 WHERE p.user_id=7`).Scan(&repeatedIssuedAt, &repeatedGrantedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !issuedAt.Equal(repeatedIssuedAt) || !grantedAt.Equal(repeatedGrantedAt) {
+		t.Fatal("repeat changed the original issue or chance timestamp")
+	}
+}
+
 func TestPromoRollbackAndLockedStock(t *testing.T) {
 	s := testStore(t)
 	h, p := seedParticipation(t, s, 1, 1)
@@ -221,6 +363,102 @@ func TestPromoRollbackAndLockedStock(t *testing.T) {
 	n, err := storage.GrantDailyChance(ctx, tx, 8, p[0].ID, h.Now().AddDate(0, 0, 1), h.Config.Location)
 	if err != nil || n != 0 {
 		t.Fatalf("chance outside partner day: %d %v", n, err)
+	}
+}
+
+func TestPromoRepeatAfterExhaustion(t *testing.T) {
+	s := testStore(t)
+	h, _ := seedParticipation(t, s, 1, 1)
+	ctx := context.Background()
+	first := actionReply(t, s, h, "last-code", "promo:get")
+	requireText(t, first, "CODE-0-0", "На сайте https://example.com", "06.05.2027 12:00")
+	var issuedAt, grantedAt time.Time
+	if err := s.Pool.QueryRow(ctx, `SELECT issued_at FROM promocodes WHERE user_id=7`).Scan(&issuedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Pool.QueryRow(ctx, `SELECT granted_at FROM user_chances WHERE user_id=7`).Scan(&grantedAt); err != nil {
+		t.Fatal(err)
+	}
+	// Exhaustion for another user must not hide the original recipient's code.
+	if err := s.Save(ctx, participantCallback("other-user", "promo:get", 8)); err != nil {
+		t.Fatal(err)
+	}
+	process(t, s, h)
+	var raw []byte
+	if err := s.Pool.QueryRow(ctx, `SELECT body FROM outgoing WHERE event_key='message_callback:other-user'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var exhausted maxapi.Body
+	if err := json.Unmarshal(raw, &exhausted); err != nil {
+		t.Fatal(err)
+	}
+	requireText(t, exhausted, "Промокоды от Partner 0 уже закончились", "можешь подписаться")
+	if len(exhausted.Attachments) == 0 || exhausted.Attachments[0].Type != "inline_keyboard" {
+		t.Fatal("missing participation keyboard")
+	}
+	var keyboard struct {
+		Buttons [][]maxapi.Button `json:"buttons"`
+	}
+	payload, err := json.Marshal(exhausted.Attachments[0].Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(payload, &keyboard); err != nil {
+		t.Fatal(err)
+	}
+	if len(keyboard.Buttons) == 0 || len(keyboard.Buttons[0]) == 0 || keyboard.Buttons[0][0] != maxapi.Callback("Участвовать в розыгрыше", "draw:enter") {
+		t.Fatalf("missing participation button: %s", raw)
+	}
+	h.Now = func() time.Time { return issuedAt.Add(time.Hour) }
+	repeated := actionReply(t, s, h, "repeat-last-code", "promo:get")
+	firstJSON, _ := json.Marshal(first)
+	repeatedJSON, _ := json.Marshal(repeated)
+	if string(firstJSON) != string(repeatedJSON) {
+		t.Fatalf("repeat changed promo screen: %s", repeatedJSON)
+	}
+	var unchanged bool
+	if err := s.Pool.QueryRow(ctx, `SELECT p.issued_at=$1 AND c.granted_at=$2 FROM promocodes p
+	 JOIN user_chances c ON c.user_id=p.user_id AND c.partner_id=p.partner_id WHERE p.user_id=7`, issuedAt, grantedAt).Scan(&unchanged); err != nil {
+		t.Fatal(err)
+	}
+	if !unchanged || count(t, s, "promocodes") != 1 || count(t, s, "user_chances") != 1 {
+		t.Fatal("repeat or exhaustion changed issue/chance state")
+	}
+}
+
+func TestPromoLockedStockExhaustionAndRecovery(t *testing.T) {
+	s := testStore(t)
+	h, _ := seedParticipation(t, s, 1, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	lock, err := s.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Rollback(context.Background())
+	if _, err = lock.Exec(ctx, `SELECT id FROM promocodes FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	// Keep the stock locked beyond every retry; the handler must still finish.
+	if err = s.Save(ctx, participantCallback("locked-stock", "promo:get", 7)); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := s.ProcessOne(ctx, h.Handle); err != nil || !done {
+		t.Fatalf("bounded retries: done=%v err=%v", done, err)
+	}
+	var text string
+	if err = s.Pool.QueryRow(ctx, `SELECT body->>'text' FROM outgoing WHERE event_key='message_callback:locked-stock'`).Scan(&text); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "уже закончились") || count(t, s, "user_chances") != 0 {
+		t.Fatalf("locked stock: %q", text)
+	}
+	if err = lock.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	requireText(t, actionReply(t, s, h, "unlocked-stock", "promo:get"), "CODE-0-0")
+	if count(t, s, "user_chances") != 1 {
+		t.Fatal("new request did not recover after unlocking stock")
 	}
 }
 
