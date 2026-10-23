@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -655,5 +656,117 @@ func TestRegistrationRollback(t *testing.T) {
 	process(t, s, h)
 	if count(t, s, "daily_entries") != 1 || count(t, s, "outgoing") != 1 {
 		t.Fatal("registration did not recover")
+	}
+}
+
+func TestConcurrentRegistrationPreservesResult(t *testing.T) {
+	s := testStore(t)
+	h, partners := seedParticipation(t, s, 1, 0)
+	ctx := context.Background()
+	var checks atomic.Int32
+	h.Membership = membershipFunc(func(context.Context, int64, int64) (bool, error) {
+		checks.Add(1)
+		return true, nil
+	})
+	concurrentActions(t, s, h, []int64{7, 7, 7, 7, 7, 7, 7, 7, 7, 7}, "draw:verify")
+	if checks.Load() != 1 || count(t, s, "daily_entries") != 1 || count(t, s, "user_chances") != 1 {
+		t.Fatalf("checks=%d entries=%d chances=%d", checks.Load(), count(t, s, "daily_entries"), count(t, s, "user_chances"))
+	}
+	var invalid int
+	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM outgoing o LEFT JOIN daily_entries e ON e.id=o.daily_entry_id
+	 WHERE e.id IS NULL OR o.body->>'text' NOT LIKE '%Накоплено шансов: 1 из 10%'`).Scan(&invalid); err != nil || invalid != 0 || count(t, s, "outgoing") != 10 {
+		t.Fatalf("confirmation jobs: invalid=%d err=%v", invalid, err)
+	}
+	registered := h.Now()
+	h.Now = func() time.Time { return partners[0].EntryClosesAt.Time }
+	requireText(t, actionReply(t, s, h, "repeat-after-close", "draw:enter"), "Ты уже участвуешь", "Накоплено шансов: 1 из 10")
+	// Delivery resumes from PostgreSQL without reprocessing the membership check.
+	restarted := storage.Store{Pool: s.Pool}
+	for i := 0; i < 11; i++ {
+		if done, err := restarted.DeliverOne(ctx, senderFunc(func(context.Context, int64, string, maxapi.Body) error { return nil })); err != nil || !done {
+			t.Fatalf("delivery %d: done=%v err=%v", i, done, err)
+		}
+	}
+	var registrationTime, checkTime, confirmed time.Time
+	if err := s.Pool.QueryRow(ctx, `SELECT registered_at,subscription_checked_at,confirmed_at FROM daily_entries
+	 WHERE confirmation_status='sent'`).Scan(&registrationTime, &checkTime, &confirmed); err != nil {
+		t.Fatal(err)
+	}
+	if !registrationTime.Equal(registered) || !checkTime.Equal(registered) || confirmed.IsZero() {
+		t.Fatal("repeat changed original registration or check time")
+	}
+	// A later failed repeat must not undo a successfully delivered confirmation.
+	actionReply(t, s, h, "failed-repeat", "draw:enter")
+	if _, err := restarted.DeliverOne(ctx, senderFunc(func(context.Context, int64, string, maxapi.Body) error {
+		return &maxapi.APIError{Status: 403}
+	})); err != nil {
+		t.Fatal(err)
+	}
+	var unchanged bool
+	if err := s.Pool.QueryRow(ctx, `SELECT confirmation_status='sent' AND confirmed_at=$1 FROM daily_entries`, confirmed).Scan(&unchanged); err != nil || !unchanged {
+		t.Fatalf("delivered confirmation was lost: %v", err)
+	}
+}
+
+func TestRegistrationConfirmationFailureRollsBack(t *testing.T) {
+	s := testStore(t)
+	h, _ := seedParticipation(t, s, 1, 0)
+	ctx := context.Background()
+	// Fail while linking the durable confirmation, after the entry and chance inserts.
+	if _, err := s.Pool.Exec(ctx, `ALTER TABLE outgoing ADD CONSTRAINT reject_confirmation CHECK (daily_entry_id IS NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(ctx, participantCallback("confirmation-failure", "draw:verify", 7)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ProcessOne(ctx, h.Handle); err == nil {
+		t.Fatal("expected confirmation persistence failure")
+	}
+	if count(t, s, "daily_entries") != 0 || count(t, s, "user_chances") != 0 || count(t, s, "outgoing") != 0 {
+		t.Fatal("registration committed without a durable confirmation")
+	}
+	if _, err := s.Pool.Exec(ctx, `ALTER TABLE outgoing DROP CONSTRAINT reject_confirmation`); err != nil {
+		t.Fatal(err)
+	}
+	process(t, storage.Store{Pool: s.Pool}, h)
+	if count(t, s, "daily_entries") != 1 || count(t, s, "user_chances") != 1 || count(t, s, "outgoing") != 1 {
+		t.Fatal("saved event did not recover after restart")
+	}
+}
+
+func TestChanceProfileCalendarAndActivity(t *testing.T) {
+	s := testStore(t)
+	h, partners := seedParticipation(t, s, 3, 1)
+	ctx := context.Background()
+	// The calendar contains May 1, May 4 and May 11, not consecutive dates.
+	if _, err := s.Pool.Exec(ctx, `UPDATE partners SET festival_day=festival_day+CASE WHEN id=$1 THEN 2 ELSE 8 END
+	 WHERE id IN ($1,$2)`, partners[1].ID, partners[2].ID); err != nil {
+		t.Fatal(err)
+	}
+	for i, tc := range []struct {
+		day       int
+		remaining int
+	}{{0, 3}, {1, 2}, {2, 2}, {4, 1}, {11, 0}, {12, 0}} {
+		h.Now = func() time.Time { return time.Date(2027, 5, tc.day, 0, 0, 0, 0, h.Config.Location) }
+		body := actionReply(t, s, h, fmt.Sprintf("empty-profile-%d", i), "profile:chances")
+		requireText(t, body, "Накоплено шансов: 0 из 10", "Пока нет активных дней.",
+			fmt.Sprintf("Осталось фестивальных дней: %d", tc.remaining), "пять победителей", "по два билета", "всего 10 билетов", "Чем больше активных дней")
+		if len(body.Attachments) == 0 {
+			t.Fatal("profile has no menu navigation")
+		}
+	}
+	h.Now = func() time.Time { return time.Date(2027, 5, 1, 12, 0, 0, 0, h.Config.Location) }
+	actionReply(t, s, h, "profile-promo", "promo:get")
+	actionReply(t, s, h, "profile-entry", "draw:verify")
+	// A request on a calendar gap does not add activity or a chance.
+	h.Now = func() time.Time { return time.Date(2027, 5, 2, 12, 0, 0, 0, h.Config.Location) }
+	actionReply(t, s, h, "profile-gap", "promo:get")
+	body := actionReply(t, s, h, "active-profile", "profile:chances")
+	requireText(t, body, "Накоплено шансов: 1 из 10", "2027-05-01 — Partner 0", "Осталось фестивальных дней: 2")
+	if strings.Count(body.Text, "2027-05-01 — Partner 0") != 1 || strings.Contains(body.Text, "Partner 1") || strings.Contains(body.Text, "Partner 2") {
+		t.Fatalf("profile shows duplicate or inactive partners: %s", body.Text)
+	}
+	if count(t, s, "user_chances") != 1 || count(t, s, "daily_entries") != 1 {
+		t.Fatal("profile reads changed participation")
 	}
 }
