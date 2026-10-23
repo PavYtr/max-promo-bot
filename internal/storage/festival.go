@@ -17,6 +17,7 @@ type Festival struct {
 
 type FestivalDay struct {
 	Day              string
+	Instant          time.Time
 	Partner          *db.Partner
 	RegistrationOpen bool
 }
@@ -36,7 +37,7 @@ func (f Festival) Current(ctx context.Context, q interface {
 	instant := now()
 	local := instant.In(f.Location)
 	year, month, day := local.Date()
-	result := FestivalDay{Day: local.Format(time.DateOnly)}
+	result := FestivalDay{Day: local.Format(time.DateOnly), Instant: instant}
 	// PostgreSQL date has no timezone; encode the local calendar date explicitly.
 	date := pgtype.Date{Time: time.Date(year, month, day, 0, 0, 0, 0, time.UTC), Valid: true}
 	partner, err := q.GetPartnerByDay(ctx, date)

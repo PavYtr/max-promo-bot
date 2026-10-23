@@ -50,14 +50,18 @@ func TestFestivalCalendarAndNavigation(t *testing.T) {
 	if err = tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err = s.Save(ctx, startEvent(1, "First")); err != nil {
+		t.Fatal(err)
+	}
+	process(t, s, bot.Handler{Config: config.Config{Location: loc}})
 	for i, tc := range []struct {
 		instant, action, text string
 	}{
 		{"2027-04-30T20:59:59Z", "promo:get", "Сегодня нет активного партнера"},
-		{"2027-04-30T21:00:00Z", "draw:enter", "Этот раздел пока недоступен"},
+		{"2027-04-30T21:00:00Z", "draw:enter", "Чтобы попасть в розыгрыш"},
 		{"2027-05-01T17:00:00Z", "draw:enter", "Прием заявок на сегодняшний розыгрыш закрыт"},
 		{"2027-05-01T17:00:00Z", "draw:verify", "Прием заявок на сегодняшний розыгрыш закрыт"},
-		{"2027-05-01T17:00:00Z", "promo:get", "Этот раздел пока недоступен"},
+		{"2027-05-01T17:00:00Z", "promo:get", "Промокоды от Partner уже закончились"},
 		{"2027-05-01T21:00:00Z", "draw:verify", "Сегодня нет активного партнера"},
 	} {
 		instant, err = time.Parse(time.RFC3339, tc.instant)
