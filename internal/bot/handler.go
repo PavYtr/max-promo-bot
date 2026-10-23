@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-type Handler struct{ Config config.Config }
+type Handler struct {
+	Config config.Config
+	Now    func() time.Time
+}
 
 func (h Handler) Handle(ctx context.Context, tx pgx.Tx, key string, u maxapi.Update) error {
 	if u.Type != "bot_started" && u.Type != "message_created" && u.Type != "message_callback" {
@@ -77,7 +80,20 @@ func (h Handler) Handle(ctx context.Context, tx pgx.Tx, key string, u maxapi.Upd
 		body = screen(h.Config.HowTo)
 	case "info:rules":
 		body = screen(h.Config.Rules)
-	case "promo:get", "draw:enter", "draw:verify", "profile:chances":
+	case "promo:get", "draw:enter", "draw:verify":
+		day, err := (storage.Festival{Location: h.Config.Location, Now: h.Now}).Current(ctx, db.New(tx))
+		if err != nil {
+			return err
+		}
+		switch {
+		case day.Partner == nil:
+			body = screen("Сегодня нет активного партнера фестиваля. Получение промокода и регистрация в розыгрыше недоступны.")
+		case action != "promo:get" && !day.RegistrationOpen:
+			body = screen("Прием заявок на сегодняшний розыгрыш закрыт.")
+		default:
+			body = screen("Этот раздел пока недоступен. Он откроется после запуска акции.")
+		}
+	case "profile:chances":
 		body = screen("Этот раздел пока недоступен. Он откроется после запуска акции.")
 	default:
 		body = screen("Нажмите /start, чтобы открыть меню.")
