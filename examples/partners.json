@@ -1,0 +1,18 @@
+{
+  "partners": [{
+    "festival_day": "2027-05-01",
+    "name": "Тестовый партнер",
+    "chat_id": -123456,
+    "link": "https://max.ru/example",
+    "promo_expires_at": "2027-05-10T23:59:59+03:00",
+    "promo_instructions": "Используйте код на сайте партнера",
+    "winner_count": 1,
+    "prizes": [{"place": 1, "name": "Подарок", "quantity": 2}],
+    "reserve_count": 2,
+    "response_seconds": 86400,
+    "entry_closes_at": "2027-05-01T20:00:00+03:00",
+    "claim_instructions": "Подтвердите получение в боте",
+    "data_recipient": "Тестовый партнер",
+    "codes": ["DEMO-001", "DEMO-002"]
+  }]
+}
