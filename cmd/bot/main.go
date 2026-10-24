@@ -147,7 +147,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return nil
 	}
 	store := storage.Store{Pool: pool}
-	handler := bot.Handler{Config: c, Membership: api}
+	handler := bot.Handler{Config: c, Membership: api, Claims: rdb}
 	appCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	var wg sync.WaitGroup
@@ -163,6 +163,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 			done, e := store.DispatchNotification(appCtx, queue)
 			if e != nil && appCtx.Err() == nil {
 				log.Warn("notification dispatch failed")
+			}
+			if !done || e != nil {
+				_ = maxapi.Pause(appCtx, time.Second)
+			}
+		}
+	})
+	start(func() {
+		for appCtx.Err() == nil {
+			done, e := store.ExpireWinner(appCtx)
+			if !done && e == nil {
+				done, e = store.CompleteDraw(appCtx)
+			}
+			if e != nil && appCtx.Err() == nil {
+				log.Warn("winner expiration failed")
 			}
 			if !done || e != nil {
 				_ = maxapi.Pause(appCtx, time.Second)

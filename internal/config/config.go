@@ -18,6 +18,7 @@ type Config struct {
 	Location                                                                              *time.Location
 	GrandReserveCount                                                                     *int
 	GrandResponseSeconds                                                                  int
+	GrandDataRecipient                                                                    string
 }
 
 func Load() (Config, error) {
@@ -28,9 +29,13 @@ func Load() (Config, error) {
 		CAFile: env("MAX_CA_FILE", "certs/russian_trusted_root_ca.crt"), Mode: env("BOT_MODE", "webhook"),
 		Listen: env("HTTP_ADDR", ":8080"), WebhookSecret: os.Getenv("WEBHOOK_SECRET"), WebhookURL: os.Getenv("WEBHOOK_URL"),
 		BannerURL: os.Getenv("BANNER_URL"), BannerToken: os.Getenv("BANNER_TOKEN"),
-		HowTo:    env("HOW_TO_TEXT", "Получите промокод или зарегистрируйтесь в розыгрыше партнера дня. Один активный день дает один шанс, максимум — 10. Главный приз: пять победителей по два билета."),
-		Rules:    env("RULES_TEXT", "Правила акции пока готовятся к публикации. Участие станет доступно после их утверждения."),
-		AdminIDs: make(map[int64]bool),
+		HowTo:              env("HOW_TO_TEXT", "Получите промокод или зарегистрируйтесь в розыгрыше партнера дня. Один активный день дает один шанс, максимум — 10. Главный приз: пять победителей по два билета."),
+		Rules:              env("RULES_TEXT", "Правила акции пока готовятся к публикации. Участие станет доступно после их утверждения."),
+		AdminIDs:           make(map[int64]bool),
+		GrandDataRecipient: strings.TrimSpace(os.Getenv("GRAND_DATA_RECIPIENT")),
+	}
+	if utf8.RuneCountInString(c.GrandDataRecipient) > 500 {
+		return c, errors.New("GRAND_DATA_RECIPIENT must fit 500 characters")
 	}
 	var err error
 	if raw := os.Getenv("GRAND_RESPONSE_SECONDS"); raw != "" {

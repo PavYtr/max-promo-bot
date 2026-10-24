@@ -10,12 +10,14 @@ import (
 	"fmt"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/redis/go-redis/v9"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type Handler struct {
+	Claims     *redis.Client
 	Config     config.Config
 	Now        func() time.Time
 	Membership interface {
@@ -54,9 +56,28 @@ func (h Handler) Handle(ctx context.Context, tx pgx.Tx, key string, u maxapi.Upd
 		action = u.Callback.Payload
 	} else if strings.HasPrefix(text, "/") {
 		command, _, _ := strings.Cut(text, " ")
-		if command == "/import" || command == "/admin" || command == "/draw_daily" || command == "/draw_grand" || command == "/approve_draw" {
+		if command == "/import" || command == "/admin" || command == "/draw_daily" || command == "/draw_grand" || command == "/approve_draw" || command == "/draw_status" {
 			if !h.Config.IsAdmin(user.ID, chat) {
 				return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: "Доступ запрещен."})
+			}
+			if command == "/draw_status" {
+				args := strings.Fields(text)
+				var id, after int64
+				var parseErr error
+				if len(args) == 2 || len(args) == 3 {
+					id, parseErr = strconv.ParseInt(args[1], 10, 64)
+				}
+				if len(args) == 3 && parseErr == nil {
+					after, parseErr = strconv.ParseInt(args[2], 10, 64)
+				}
+				if id <= 0 || after < 0 || parseErr != nil || len(args) > 3 {
+					return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: "Формат: /draw_status draw_id [after_winner_id]. ID розыгрыша положительный, курсор неотрицательный."})
+				}
+				message, err := storage.DrawStatus(ctx, tx, id, after)
+				if err != nil {
+					return err
+				}
+				return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: message})
 			}
 			if command == "/approve_draw" {
 				args := strings.Fields(text)
@@ -67,7 +88,7 @@ func (h Handler) Handle(ctx context.Context, tx pgx.Tx, key string, u maxapi.Upd
 				if id <= 0 {
 					return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: "Формат: /approve_draw draw_id, ID должен быть положительным числом."})
 				}
-				message, err := storage.ApproveDraw(ctx, tx, id, user.ID, h.instant(), h.Config.GrandResponseSeconds)
+				message, err := storage.ApproveDraw(ctx, tx, id, user.ID, h.instant(), h.Config.GrandResponseSeconds, h.Config.GrandDataRecipient)
 				if err != nil {
 					return err
 				}
@@ -100,7 +121,7 @@ func (h Handler) Handle(ctx context.Context, tx pgx.Tx, key string, u maxapi.Upd
 				return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: result.Message})
 			}
 			if command == "/admin" {
-				return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: "Импорт: /import {\"partners\":[...]}. Розыгрыши: /draw_daily [partner_id], /draw_grand, /approve_draw draw_id. Формат — в README."})
+				return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: "Импорт: /import {\"partners\":[...]}. Розыгрыши: /draw_daily [partner_id], /draw_grand, /approve_draw draw_id, /draw_status draw_id [after_winner_id]. Формат — в README."})
 			}
 			raw := strings.TrimSpace(strings.TrimPrefix(text, "/import"))
 			data, err := storage.ParseImport([]byte(raw), h.Config.Location)
@@ -123,6 +144,9 @@ func (h Handler) Handle(ctx context.Context, tx pgx.Tx, key string, u maxapi.Upd
 			}
 			return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: "Партнеры и промокоды импортированы."})
 		}
+	}
+	if handled, err := h.claim(ctx, tx, key, u, action, text); handled || err != nil {
+		return err
 	}
 	if action == "promo:get" || strings.HasPrefix(action, "draw:") || action == "profile:chances" {
 		if err := storage.LockParticipant(ctx, tx, user.ID); errors.Is(err, pgx.ErrNoRows) {

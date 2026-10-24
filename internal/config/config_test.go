@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestConfiguration(t *testing.T) {
 	t.Setenv("BOT_MODE", "webhook")
@@ -57,5 +60,18 @@ func TestGrandResponseSeconds(t *testing.T) {
 		if _, err := Load(); err == nil {
 			t.Fatal("invalid response period", raw)
 		}
+	}
+}
+
+func TestGrandDataRecipient(t *testing.T) {
+	t.Setenv("BOT_MODE", "polling")
+	t.Setenv("GRAND_DATA_RECIPIENT", "  Оператор билетов  ")
+	c, err := Load()
+	if err != nil || c.GrandDataRecipient != "Оператор билетов" {
+		t.Fatal(c.GrandDataRecipient, err)
+	}
+	t.Setenv("GRAND_DATA_RECIPIENT", strings.Repeat("я", 501))
+	if _, err = Load(); err == nil {
+		t.Fatal("long recipient accepted")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -13,7 +14,7 @@ import (
 )
 
 // ApproveDraw runs in the inbox transaction, together with the administrator's reply.
-func ApproveDraw(ctx context.Context, tx pgx.Tx, id, admin int64, now time.Time, grandResponse int) (string, error) {
+func ApproveDraw(ctx context.Context, tx pgx.Tx, id, admin int64, now time.Time, grandResponse int, grandRecipient string) (string, error) {
 	var status, kind string
 	var partner *int64
 	err := tx.QueryRow(ctx, `SELECT status,kind,partner_id FROM draws WHERE id=$1 FOR UPDATE`, id).Scan(&status, &kind, &partner)
@@ -34,14 +35,18 @@ func ApproveDraw(ctx context.Context, tx pgx.Tx, id, admin int64, now time.Time,
 		return "Результат розыгрыша не зафиксирован. Утверждение недоступно.", nil
 	}
 	seconds := grandResponse
+	recipient := strings.TrimSpace(grandRecipient)
 	name, instructions := "", "Нажми «Получить приз», чтобы подтвердить получение и оставить необходимые данные."
 	if kind == "daily" {
-		if err = tx.QueryRow(ctx, `SELECT name,claim_instructions,response_seconds FROM partners WHERE id=$1`, partner).Scan(&name, &instructions, &seconds); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT name,claim_instructions,response_seconds,data_recipient FROM partners WHERE id=$1`, partner).Scan(&name, &instructions, &seconds, &recipient); err != nil {
 			return "", err
 		}
 	}
 	if seconds <= 0 {
 		return "Задайте согласованный срок ответа GRAND_RESPONSE_SECONDS перед утверждением финала.", nil
+	}
+	if recipient == "" {
+		return "Задайте получателя данных: data_recipient партнера или GRAND_DATA_RECIPIENT для финала перед утверждением.", nil
 	}
 	rows, err := tx.Query(ctx, `SELECT id,prize,prize_quantity FROM winners WHERE draw_id=$1 AND state='pending_notification' ORDER BY id`, id)
 	if err != nil {
@@ -62,6 +67,9 @@ func ApproveDraw(ctx context.Context, tx pgx.Tx, id, admin int64, now time.Time,
 		text := fmt.Sprintf("Ты в числе хедлайнеров дня 🔥\nТы выиграл %s от %s. Количество: %d.\nЧтобы получить приз: %s", prize, name, quantity, instructions)
 		if kind == "grand" {
 			text = fmt.Sprintf("Ты в числе победителей главного розыгрыша 🔥\nТвой приз: %s. Количество: %d (два билета).\n%s", prize, quantity, instructions)
+		}
+		if kind == "daily" {
+			text += "\nНажми «Получить приз», введи имя и фамилию и подтверди согласие на передачу данных партнеру."
 		}
 		text += fmt.Sprintf("\nСрок ответа после доставки уведомления: %d секунд.", seconds)
 		if utf8.RuneCountInString(text) > 4000 {
@@ -90,7 +98,7 @@ func ApproveDraw(ctx context.Context, tx pgx.Tx, id, admin int64, now time.Time,
 		return "", err
 	}
 	for _, job := range jobs {
-		if _, err = tx.Exec(ctx, `INSERT INTO winner_notifications(winner_id,body,response_seconds) VALUES($1,$2,$3)`, job.id, job.body, seconds); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO winner_notifications(winner_id,body,response_seconds,data_recipient) VALUES($1,$2,$3,$4)`, job.id, job.body, seconds, recipient); err != nil {
 			return "", err
 		}
 	}
@@ -166,7 +174,7 @@ func (s Store) NotifyWinner(ctx context.Context, id int64, sender WinnerSender) 
 	}
 	if sendErr != nil {
 		var api *maxapi.APIError
-		permanent := errors.As(sendErr, &api) && api.Status >= 400 && api.Status < 500 && api.Status != 429 && api.Code != "attachment.not.ready"
+		permanent := errors.As(sendErr, &api) && api.Status >= 400 && api.Status < 500 && api.Status != 401 && api.Status != 408 && api.Status != 429 && api.Code != "attachment.not.ready"
 		if !permanent {
 			if _, err = tx.Exec(ctx, `UPDATE winner_notifications SET attempts=attempts+1 WHERE winner_id=$1`, id); err != nil {
 				return err

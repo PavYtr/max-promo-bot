@@ -111,20 +111,22 @@ type UserChance struct {
 }
 
 type Winner struct {
-	ID            int64
-	DrawID        int64
-	UserID        int64
-	Role          string
-	ReserveOrder  pgtype.Int4
-	Prize         pgtype.Text
-	PrizeQuantity pgtype.Int4
-	State         string
-	NotifiedAt    pgtype.Timestamptz
-	Deadline      pgtype.Timestamptz
-	FirstName     pgtype.Text
-	LastName      pgtype.Text
-	ConsentAt     pgtype.Timestamptz
-	DataRecipient pgtype.Text
+	ID                  int64
+	DrawID              int64
+	UserID              int64
+	Role                string
+	ReserveOrder        pgtype.Int4
+	Prize               pgtype.Text
+	PrizeQuantity       pgtype.Int4
+	State               string
+	NotifiedAt          pgtype.Timestamptz
+	Deadline            pgtype.Timestamptz
+	FirstName           pgtype.Text
+	LastName            pgtype.Text
+	ConsentAt           pgtype.Timestamptz
+	DataRecipient       pgtype.Text
+	ReplacesWinnerID    pgtype.Int8
+	ReservesExhaustedAt pgtype.Timestamptz
 }
 
 type WinnerNotification struct {
@@ -135,4 +137,5 @@ type WinnerNotification struct {
 	Attempts        int32
 	NextEnqueueAt   pgtype.Timestamptz
 	SentAt          pgtype.Timestamptz
+	DataRecipient   pgtype.Text
 }

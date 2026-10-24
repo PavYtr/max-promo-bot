@@ -72,7 +72,7 @@ func approve(t *testing.T, s storage.Store, id int64) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
-	if _, err = storage.ApproveDraw(ctx, tx, id, 42, time.Now(), 7200); err != nil {
+	if _, err = storage.ApproveDraw(ctx, tx, id, 42, time.Now(), 7200, "Билетный оператор Тест"); err != nil {
 		t.Fatal(err)
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -132,7 +132,7 @@ func TestApprovalAtomicConcurrentAndNotifications(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = storage.ApproveDraw(ctx, tx, id, 42, time.Now(), 7200); err != nil {
+			if _, err = storage.ApproveDraw(ctx, tx, id, 42, time.Now(), 7200, "Билетный оператор Тест"); err != nil {
 				t.Fatal(err)
 			}
 			if err = tx.Rollback(ctx); err != nil {
@@ -153,7 +153,7 @@ func TestApprovalAtomicConcurrentAndNotifications(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = storage.ApproveDraw(ctx, tx, id, 42, time.Now(), 7200)
+			_, err = storage.ApproveDraw(ctx, tx, id, 42, time.Now(), 7200, "Билетный оператор Тест")
 			if err == nil {
 				t.Fatal("injected failure did not fail")
 			}
@@ -258,6 +258,7 @@ func TestApprovalCommandAccessAndValidation(t *testing.T) {
 		}
 	}
 	h.Config.GrandResponseSeconds = 3600
+	h.Config.GrandDataRecipient = "Оператор"
 	if err := s.Save(ctx, commandEvent("valid-approval", fmt.Sprintf("/approve_draw %d", id), 1, -1)); err != nil {
 		t.Fatal(err)
 	}
