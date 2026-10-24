@@ -19,13 +19,14 @@ type DailyEntry struct {
 }
 
 type Draw struct {
-	ID         int64
-	Kind       string
-	PartnerID  pgtype.Int8
-	Status     string
-	DrawnAt    pgtype.Timestamptz
-	ApprovedAt pgtype.Timestamptz
-	ApprovedBy pgtype.Int8
+	ID                int64
+	Kind              string
+	PartnerID         pgtype.Int8
+	Status            string
+	DrawnAt           pgtype.Timestamptz
+	ApprovedAt        pgtype.Timestamptz
+	ApprovedBy        pgtype.Int8
+	SelectionSnapshot []byte
 }
 
 type DrawParticipant struct {
@@ -98,6 +99,7 @@ type User struct {
 	LastName       string
 	Username       string
 	FirstStartedAt pgtype.Timestamptz
+	PrivateChatID  pgtype.Int8
 }
 
 type UserChance struct {
@@ -123,4 +125,14 @@ type Winner struct {
 	LastName      pgtype.Text
 	ConsentAt     pgtype.Timestamptz
 	DataRecipient pgtype.Text
+}
+
+type WinnerNotification struct {
+	WinnerID        int64
+	Body            []byte
+	ResponseSeconds int32
+	Status          string
+	Attempts        int32
+	NextEnqueueAt   pgtype.Timestamptz
+	SentAt          pgtype.Timestamptz
 }

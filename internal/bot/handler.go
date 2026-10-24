@@ -43,15 +43,45 @@ func (h Handler) Handle(ctx context.Context, tx pgx.Tx, key string, u maxapi.Upd
 		if err := db.New(tx).UpsertUser(ctx, db.UpsertUserParams{ID: user.ID, FirstName: first, LastName: user.LastName, Username: user.Username, FirstStartedAt: started}); err != nil {
 			return err
 		}
+		if u.Type == "bot_started" || u.Message.Recipient.ChatType == "dialog" {
+			if _, err := tx.Exec(ctx, `UPDATE users SET private_chat_id=$2 WHERE id=$1`, user.ID, chat); err != nil {
+				return err
+			}
+		}
 		action = "menu"
 	} else if u.Type == "message_callback" {
 		callback = u.Callback.ID
 		action = u.Callback.Payload
 	} else if strings.HasPrefix(text, "/") {
 		command, _, _ := strings.Cut(text, " ")
-		if command == "/import" || command == "/admin" || command == "/draw_daily" {
+		if command == "/import" || command == "/admin" || command == "/draw_daily" || command == "/draw_grand" || command == "/approve_draw" {
 			if !h.Config.IsAdmin(user.ID, chat) {
 				return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: "Доступ запрещен."})
+			}
+			if command == "/approve_draw" {
+				args := strings.Fields(text)
+				var id int64
+				if len(args) == 2 {
+					id, _ = strconv.ParseInt(args[1], 10, 64)
+				}
+				if id <= 0 {
+					return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: "Формат: /approve_draw draw_id, ID должен быть положительным числом."})
+				}
+				message, err := storage.ApproveDraw(ctx, tx, id, user.ID, h.instant(), h.Config.GrandResponseSeconds)
+				if err != nil {
+					return err
+				}
+				return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: message})
+			}
+			if command == "/draw_grand" {
+				if len(strings.Fields(text)) != 1 {
+					return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: "Формат: /draw_grand. Число резервов задается в GRAND_RESERVE_COUNT."})
+				}
+				result, err := storage.DrawGrand(ctx, tx, h.instant(), h.Config.Location, h.Config.GrandReserveCount)
+				if err != nil {
+					return err
+				}
+				return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: result.Message})
 			}
 			if command == "/draw_daily" {
 				args := strings.Fields(text)
@@ -70,7 +100,7 @@ func (h Handler) Handle(ctx context.Context, tx pgx.Tx, key string, u maxapi.Upd
 				return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: result.Message})
 			}
 			if command == "/admin" {
-				return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: "Импорт: /import {\"partners\":[...]}. Розыгрыш: /draw_daily [partner_id]. Формат — в README."})
+				return storage.Reply(ctx, tx, key, chat, "", maxapi.Body{Text: "Импорт: /import {\"partners\":[...]}. Розыгрыши: /draw_daily [partner_id], /draw_grand, /approve_draw draw_id. Формат — в README."})
 			}
 			raw := strings.TrimSpace(strings.TrimPrefix(text, "/import"))
 			data, err := storage.ParseImport([]byte(raw), h.Config.Location)

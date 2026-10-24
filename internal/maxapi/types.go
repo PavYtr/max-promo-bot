@@ -17,7 +17,8 @@ type User struct {
 type Message struct {
 	Sender    User `json:"sender"`
 	Recipient struct {
-		ChatID int64 `json:"chat_id"`
+		ChatID   int64  `json:"chat_id"`
+		ChatType string `json:"chat_type"`
 	} `json:"recipient"`
 	Body struct {
 		MID  string `json:"mid"`

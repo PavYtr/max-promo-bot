@@ -6,9 +6,11 @@ import (
 	"errors"
 	"example.com/max-festival-bot/internal/bot"
 	"example.com/max-festival-bot/internal/config"
+	"example.com/max-festival-bot/internal/jobs"
 	"example.com/max-festival-bot/internal/maxapi"
 	"example.com/max-festival-bot/internal/storage"
 	"example.com/max-festival-bot/internal/transport"
+	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -150,6 +152,23 @@ func run(ctx context.Context, log *slog.Logger) error {
 	defer stop()
 	var wg sync.WaitGroup
 	start := func(fn func()) { wg.Add(1); go func() { defer wg.Done(); fn() }() }
+	queue := jobs.Queue{Client: asynq.NewClientFromRedisClient(rdb)}
+	worker := asynq.NewServerFromRedisClient(rdb, asynq.Config{Concurrency: 4, Queues: map[string]int{"winners": 1}, BaseContext: func() context.Context { return appCtx }, ShutdownTimeout: 10 * time.Second})
+	if err = worker.Start(jobs.Handler(store, api)); err != nil {
+		return errors.New("notification worker failed to start")
+	}
+	defer worker.Shutdown()
+	start(func() {
+		for appCtx.Err() == nil {
+			done, e := store.DispatchNotification(appCtx, queue)
+			if e != nil && appCtx.Err() == nil {
+				log.Warn("notification dispatch failed")
+			}
+			if !done || e != nil {
+				_ = maxapi.Pause(appCtx, time.Second)
+			}
+		}
+	})
 	if c.Mode == "polling" {
 		// A dedicated connection holds the session lock; two pollers would lose cursor progress.
 		conn, e := pool.Acquire(ctx)

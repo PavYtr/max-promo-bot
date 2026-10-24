@@ -159,5 +159,8 @@ func DrawDaily(ctx context.Context, tx pgx.Tx, partner int64, now time.Time, loc
 			return DailyDrawResult{}, err
 		}
 	}
+	if err = sealDraw(ctx, tx, id); err != nil {
+		return DailyDrawResult{}, err
+	}
 	return DailyDrawResult{ID: id, Message: fmt.Sprintf("Розыгрыш #%d сохранен: %d участников, %d основных и %d резервных. Статус: pending_approval. Уведомления победителям ожидают утверждения.", id, len(users), winners, reserves)}, nil
 }

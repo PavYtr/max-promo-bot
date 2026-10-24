@@ -12,7 +12,7 @@ import (
 )
 
 const getUser = `-- name: GetUser :one
-SELECT id, first_name, last_name, username, first_started_at FROM users WHERE id = $1
+SELECT id, first_name, last_name, username, first_started_at, private_chat_id FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
@@ -24,6 +24,7 @@ func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
 		&i.LastName,
 		&i.Username,
 		&i.FirstStartedAt,
+		&i.PrivateChatID,
 	)
 	return i, err
 }

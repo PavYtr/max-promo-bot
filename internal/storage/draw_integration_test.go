@@ -120,7 +120,7 @@ func TestDailyDrawRecoverySnapshotAndConcurrency(t *testing.T) {
 		t.Fatal("wrong draw size or premature notifications")
 	}
 	var good bool
-	if err := s.Pool.QueryRow(ctx, `SELECT status='pending_approval' AND drawn_at=$1 AND approved_at IS NULL FROM draws`, closed).Scan(&good); err != nil || !good {
+	if err := s.Pool.QueryRow(ctx, `SELECT status='pending_approval' AND drawn_at=$1 AND approved_at IS NULL AND jsonb_array_length(selection_snapshot)=4 FROM draws`, closed).Scan(&good); err != nil || !good {
 		t.Fatal("draw metadata", err)
 	}
 	if err := s.Pool.QueryRow(ctx, `SELECT count(*)=2 FROM winners WHERE role='reserve' AND state='reserve' AND deadline IS NULL AND notified_at IS NULL AND prize IS NULL AND prize_quantity IS NULL`).Scan(&good); err != nil || !good {

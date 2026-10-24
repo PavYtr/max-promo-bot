@@ -16,6 +16,8 @@ type Config struct {
 	AdminIDs                                                                              map[int64]bool
 	AdminChatID                                                                           int64
 	Location                                                                              *time.Location
+	GrandReserveCount                                                                     *int
+	GrandResponseSeconds                                                                  int
 }
 
 func Load() (Config, error) {
@@ -31,6 +33,19 @@ func Load() (Config, error) {
 		AdminIDs: make(map[int64]bool),
 	}
 	var err error
+	if raw := os.Getenv("GRAND_RESPONSE_SECONDS"); raw != "" {
+		c.GrandResponseSeconds, err = strconv.Atoi(raw)
+		if err != nil || c.GrandResponseSeconds <= 0 || c.GrandResponseSeconds > 2147483647 {
+			return c, errors.New("GRAND_RESPONSE_SECONDS must be 1..2147483647")
+		}
+	}
+	if raw := os.Getenv("GRAND_RESERVE_COUNT"); raw != "" {
+		n, e := strconv.Atoi(raw)
+		if e != nil || n < 0 || n > 10000 {
+			return c, errors.New("GRAND_RESERVE_COUNT must be 0..10000")
+		}
+		c.GrandReserveCount = &n
+	}
 	c.Location, err = time.LoadLocation(env("FESTIVAL_TIMEZONE", "Europe/Moscow"))
 	if err != nil {
 		return c, errors.New("invalid FESTIVAL_TIMEZONE")

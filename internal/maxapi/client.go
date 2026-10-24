@@ -148,6 +148,12 @@ func (c *Client) Send(ctx context.Context, chat int64, callback string, body Bod
 	}
 	return c.Call(ctx, "POST", "/messages", url.Values{"chat_id": {strconv.FormatInt(chat, 10)}}, body, chat, nil)
 }
+func (c *Client) SendUser(ctx context.Context, user, chat int64, body Body) error {
+	if chat == 0 {
+		chat = user
+	}
+	return c.Call(ctx, "POST", "/messages", url.Values{"user_id": {strconv.FormatInt(user, 10)}}, body, chat, nil)
+}
 func (c *Client) Updates(ctx context.Context, marker *int64) ([]json.RawMessage, *int64, error) {
 	q := url.Values{"timeout": {"30"}, "limit": {"100"}, "types": {"bot_started,message_created,message_callback"}}
 	if marker != nil {

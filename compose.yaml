@@ -49,6 +49,8 @@ services:
       MAX_API_URL: ${MAX_API_URL:-https://platform-api2.max.ru}
       MAX_CA_FILE: certs/russian_trusted_root_ca.crt
       FESTIVAL_TIMEZONE: ${FESTIVAL_TIMEZONE:-Europe/Moscow}
+      GRAND_RESERVE_COUNT: ${GRAND_RESERVE_COUNT:-}
+      GRAND_RESPONSE_SECONDS: ${GRAND_RESPONSE_SECONDS:-}
       ADMIN_IDS: ${ADMIN_IDS:-}
       ADMIN_CHAT_ID: ${ADMIN_CHAT_ID:-}
       BANNER_URL: ${BANNER_URL:-}

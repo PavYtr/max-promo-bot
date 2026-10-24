@@ -12,9 +12,12 @@ import (
 	"time"
 )
 
-type gateStub struct{ calls, cooldowns int }
+type gateStub struct {
+	calls, cooldowns int
+	chat             int64
+}
 
-func (g *gateStub) Wait(context.Context, int64) error             { g.calls++; return nil }
+func (g *gateStub) Wait(_ context.Context, chat int64) error      { g.calls++; g.chat = chat; return nil }
 func (g *gateStub) Cooldown(context.Context, time.Duration) error { g.cooldowns++; return nil }
 func TestClientContractsAndRetries(t *testing.T) {
 	calls := 0
@@ -202,5 +205,26 @@ func TestExpiredCallbackFallbackAndFailedResult(t *testing.T) {
 	}
 	if len(paths) != 2 || paths[0] != "/answers" || paths[1] != "/messages" {
 		t.Fatal("expired callback must fall back to normal message")
+	}
+}
+
+func TestSendUserContract(t *testing.T) {
+	gate := &gateStub{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/messages" || r.URL.Query().Get("user_id") != "7" || r.URL.Query().Has("chat_id") {
+			t.Error("invalid user destination")
+		}
+		_, _ = w.Write([]byte(`{"message":{}}`))
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "test", "", gate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.SendUser(context.Background(), 7, 99, Body{Text: "Prize"}); err != nil {
+		t.Fatal(err)
+	}
+	if gate.calls != 1 || gate.chat != 99 {
+		t.Fatal("notification bypassed shared limiter")
 	}
 }
